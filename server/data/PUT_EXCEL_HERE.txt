@@ -1,0 +1,6 @@
+﻿Put your Excel file here:
+server\data\Service Matrix's 2026 Voice and Tickets.xlsx
+
+Your uploaded file in this chat was:
+ /mnt/data/Service Matrix's 2026 Voice and Tickets.xlsx
+(That's the sandbox path here — on your PC, just copy the Excel into server\data with the same name.)
