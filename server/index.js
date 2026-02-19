@@ -12,22 +12,28 @@ import { ticketAssist } from "./ticketAssist.js";
 
 const app = express();
 
-// ✅ CORS fixed for Netlify + local dev + Render
-const ALLOWED_ORIGINS = [
+// server/index.js  (REPLACE your CORS block with this one)
+const ALLOWED_ORIGINS = new Set([
   "https://ticket-copilot-agent.netlify.app",
   "http://localhost:5173",
-  "http://localhost:3000"
-];
+  "http://localhost:3000",
+]);
 
 app.use(
   cors({
     origin(origin, cb) {
-      // allow curl/postman/server-to-server (no Origin header)
+      // allow curl/postman and server-to-server calls
       if (!origin) return cb(null, true);
-      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+
+      // ✅ allow any Vite dev port: http://localhost:5173, 5174, 5175, etc.
+      if (/^http:\/\/localhost:\d+$/.test(origin)) return cb(null, true);
+
+      if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+
+      // return a JSON error instead of crashing / vague failure
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
-    credentials: false
+    credentials: false,
   })
 );
 
@@ -305,6 +311,18 @@ app.post("/api/ticket-assist", async (req, res) => {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
+// server/index.js  (ADD this tiny error handler near the bottom, before app.listen)
+app.use((err, _req, res, _next) => {
+  console.error("❌ Unhandled error:", err);
+  res.status(500).json({
+    ok: false,
+    error: err?.message || String(err),
+    hint: err?.message?.includes("CORS blocked")
+      ? "Allow your frontend origin in server/index.js CORS settings (Vite may change ports)."
+      : undefined,
+  });
+});
+
 
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`✅ HotelPlanner Agent running on http://localhost:${PORT}`));
