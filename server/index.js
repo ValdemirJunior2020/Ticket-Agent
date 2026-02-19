@@ -5,12 +5,32 @@ import fs from "fs";
 import path from "path";
 import XLSX from "xlsx";
 
+// server/index.js  (THIS WHOLE BLOCK REPLACES YOUR BLOCK)
 import { appendTicketLog } from "./sheetsClient.js";
 import { kimiChat } from "./kimiClient.js";
 import { ticketAssist } from "./ticketAssist.js";
 
 const app = express();
-app.use(cors());
+
+// ✅ CORS fixed for Netlify + local dev + Render
+const ALLOWED_ORIGINS = [
+  "https://ticket-copilot-agent.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:3000"
+];
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      // allow curl/postman/server-to-server (no Origin header)
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: false
+  })
+);
+
 app.use(express.json({ limit: "10mb" }));
 
 // ==============================
