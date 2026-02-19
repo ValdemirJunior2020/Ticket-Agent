@@ -5,32 +5,24 @@ import fs from "fs";
 import path from "path";
 import XLSX from "xlsx";
 
-// server/index.js  (THIS WHOLE BLOCK REPLACES YOUR BLOCK)
 import { appendTicketLog } from "./sheetsClient.js";
 import { kimiChat } from "./kimiClient.js";
 import { ticketAssist } from "./ticketAssist.js";
 
 const app = express();
 
-// server/index.js  (REPLACE your CORS block with this one)
+// ✅ CORS (allow Netlify + ANY localhost dev port)
 const ALLOWED_ORIGINS = new Set([
   "https://ticket-copilot-agent.netlify.app",
-  "http://localhost:5173",
   "http://localhost:3000",
 ]);
 
 app.use(
   cors({
     origin(origin, cb) {
-      // allow curl/postman and server-to-server calls
-      if (!origin) return cb(null, true);
-
-      // ✅ allow any Vite dev port: http://localhost:5173, 5174, 5175, etc.
-      if (/^http:\/\/localhost:\d+$/.test(origin)) return cb(null, true);
-
+      if (!origin) return cb(null, true); // curl/postman/server-to-server
+      if (/^http:\/\/localhost:\d+$/.test(origin)) return cb(null, true); // Vite ports (5173, 5174...)
       if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
-
-      // return a JSON error instead of crashing / vague failure
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
     credentials: false,
@@ -46,7 +38,6 @@ app.use(express.json({ limit: "10mb" }));
 const DEFAULT_EXCEL = "data/Service Matrix's 2026 Voice and Tickets.xlsx";
 const EXCEL_PATH = path.resolve(process.cwd(), process.env.EXCEL_PATH || DEFAULT_EXCEL);
 
-// Optional: only load these sheets if you want (comma-separated names). Leave empty to load all.
 const SHEET_ALLOWLIST = (process.env.SHEETS || "")
   .split(",")
   .map((s) => s.trim())
@@ -119,7 +110,7 @@ function loadProceduresFromExcel() {
         id: `${sheetName}:${rowIndex}`,
         sheet: sheetName,
         title: guessTitle(row),
-        text
+        text,
       });
     }
   }
@@ -161,7 +152,7 @@ function ragSearchLocal(procs, query, topK = 6) {
       sheet: p.sheet,
       title: p.title,
       text: p.text,
-      score: p.score
+      score: p.score,
     }));
 
   return { query, picked };
@@ -175,20 +166,16 @@ function ensureProceduresLoaded() {
 function extractItinerary(raw) {
   const s = String(raw || "");
 
-  // common: (H14283856)
   const m1 = s.match(/\(([A-Z]\d{6,})\)/i);
   if (m1?.[1]) return m1[1].toUpperCase();
 
-  // "Itinerary/Confirmation Number H14283856"
   const m2 = s.match(/itinerary\/confirmation\s*number\s*([A-Z]\d{6,})/i);
   if (m2?.[1]) return m2[1].toUpperCase();
 
-  // "Itinerary # H14283856"
   const m3 = s.match(/itinerary\s*#\s*([A-Z]\d{6,})/i);
   if (m3?.[1]) return m3[1].toUpperCase();
 
-  // any H + digits
-  const m4 = s.match(/\b([A-Z]\d{6,})\b/);
+  const m4 = s.match(/\b(H\d{6,})\b/i);
   if (m4?.[1]) return m4[1].toUpperCase();
 
   return "";
@@ -206,7 +193,7 @@ app.get("/health", (_req, res) => {
     excel: path.basename(EXCEL_PATH),
     sheetsFilter: SHEET_ALLOWLIST.length ? SHEET_ALLOWLIST : "ALL",
     procedures: PROCEDURES.length,
-    time: new Date().toISOString()
+    time: new Date().toISOString(),
   });
 });
 
@@ -223,7 +210,7 @@ app.post("/api/reload-procedures", async (_req, res) => {
 app.post("/api/ask", async (req, res) => {
   const startedAt = Date.now();
   try {
-    const { agentName = "", agentEmail = "", callCenter = "", scenario = "", question = "", meta = {} } = req.body || {};
+    const { scenario = "", question = "" } = req.body || {};
     if (!String(question).trim()) return res.status(400).json({ ok: false, error: "Question is required." });
 
     ensureProceduresLoaded();
@@ -242,30 +229,28 @@ app.post("/api/ask", async (req, res) => {
 
     const answer = await kimiChat([
       { role: "system", content: system },
-      { role: "user", content: user }
+      { role: "user", content: user },
     ]);
 
     const latencyMs = Date.now() - startedAt;
-
-    res.json({ ok: true, answer, rag, latencyMs, meta: { callCenter, agentName, agentEmail, ...meta } });
+    res.json({ ok: true, answer, rag, latencyMs });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
 // ✅ Ticket Specialist endpoint (paste Zendesk dump)
-// Saves ONLY: agentName, agentEmail, itinerary, solved -> to Google Sheet "Ticket Agent" / Sheet1 via Code.gs Web App
+// Saves ONLY: agentName, agentEmail, itinerary, solved -> to Google Sheet via Code.gs Web App
 app.post("/api/ticket-assist", async (req, res) => {
   const startedAt = Date.now();
+
   try {
     const {
       agentName = "",
       agentEmail = "",
-      callCenter = "",
       rawTicketText = "",
-      solved = "NO", // client can send YES/NO, default NO
+      solved = "NO", // YES/NO or boolean
       useAI = true,
-      meta = {}
     } = req.body || {};
 
     if (!rawTicketText || String(rawTicketText).trim().length < 20) {
@@ -278,40 +263,61 @@ app.post("/api/ticket-assist", async (req, res) => {
       rawTicketText,
       useAI,
       ragSearchFn: async (q) => ragSearchLocal(PROCEDURES, q, 6),
-      aiAnswerFn: async (messages) => kimiChat(messages)
+      aiAnswerFn: async (messages) => kimiChat(messages),
     });
 
     const latencyMs = Date.now() - startedAt;
 
-    const itinerary = out?.parsed?.itinerary || out?.parsed?.itineraryNumber || extractItinerary(rawTicketText);
+    // server/index.js
+// ✅ only change: when saving to Google Sheets, include "ticketPlanOutput" field
+// Find your /api/ticket-assist block and replace ONLY the logging call with this version:
 
-    // ✅ Save ONLY the 4 fields you requested
-    if (itinerary && agentName && agentEmail) {
-      try {
-        await appendTicketLog({
-          agentName,
-          agentEmail,
-          itinerary,
-          solved
-        });
-      } catch {
-        // ignore logging failures (still return answer)
-      }
-    }
+// ... inside /api/ticket-assist after `const out = await ticketAssist(...)`
 
-    res.json({
-      ok: true,
-      latencyMs,
+const itinerary = out?.parsed?.itinerary || out?.parsed?.itineraryNumber || extractItinerary(rawTicketText);
+
+// ✅ Save ONLY the requested fields + Ticket Plan Output (Column G)
+let saved = false;
+let saveError = "";
+
+try {
+  if (!agentName || !agentEmail) {
+    saveError = "Not saved: agentName and agentEmail are required.";
+  } else if (!itinerary) {
+    saveError = "Not saved: itinerary not found in the pasted ticket.";
+  } else {
+    const r = await appendTicketLog({
+      agentName,
+      agentEmail,
       itinerary,
-      saved: Boolean(itinerary && agentName && agentEmail),
-      ...out,
-      meta: { callCenter, agentName, agentEmail, ...meta }
+      solved,
+      ticketPlanOutput: out?.planText || "" // ✅ Column G
     });
+
+    saved = !!r?.ok;
+    if (!saved) saveError = r?.reason || "Google Sheets logging failed.";
+  }
+} catch (e) {
+  saved = false;
+  saveError = String(e?.message || e);
+}
+
+// then return response includes saved/saveError
+return res.json({
+  ok: true,
+  latencyMs,
+  saved,
+  saveError,
+  itinerary,
+  ...out
+});
+
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
-// server/index.js  (ADD this tiny error handler near the bottom, before app.listen)
+
+// ✅ JSON error handler (shows CORS + other crashes as JSON)
 app.use((err, _req, res, _next) => {
   console.error("❌ Unhandled error:", err);
   res.status(500).json({
@@ -322,7 +328,6 @@ app.use((err, _req, res, _next) => {
       : undefined,
   });
 });
-
 
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`✅ HotelPlanner Agent running on http://localhost:${PORT}`));
